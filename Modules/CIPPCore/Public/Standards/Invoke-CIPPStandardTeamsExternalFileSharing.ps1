@@ -26,35 +26,44 @@ function Invoke-CIPPStandardTeamsExternalFileSharing {
         POWERSHELLEQUIVALENT
             Set-CsTeamsClientConfiguration -AllowGoogleDrive \$false -AllowShareFile \$false -AllowBox \$false -AllowDropBox \$false -AllowEgnyte \$false
         RECOMMENDEDBY
-            "CIS 3.0"
+            "CIS"
         UPDATECOMMENTBLOCK
             Run the Tools\Update-StandardsComments.ps1 script to update this comment block
     .LINK
-        https://docs.cipp.app/user-documentation/tenant/standards/list-standards/teams-standards#low-impact
+        https://docs.cipp.app/user-documentation/tenant/standards/list-standards
     #>
 
     param($Tenant, $Settings)
+    $TestResult = Test-CIPPStandardLicense -StandardName 'TeamsExternalFileSharing' -TenantFilter $Tenant -RequiredCapabilities @('MCOSTANDARD', 'MCOEV', 'MCOIMP', 'TEAMS1','Teams_Room_Standard')
     ##$Rerun -Type Standard -Tenant $Tenant -Settings $Settings 'TeamsExternalFileSharing'
-    Write-Host "TeamsExternalFileSharing: $($Settings | ConvertTo-Json)"
-    $CurrentState = New-TeamsRequest -TenantFilter $Tenant -Cmdlet 'Get-CsTeamsClientConfiguration' | Select-Object AllowGoogleDrive, AllowShareFile, AllowBox, AllowDropBox, AllowEgnyte
 
-    if ($null -eq $Settings.AllowGoogleDrive) { $Settings.AllowGoogleDrive = $false }
-    if ($null -eq $Settings.AllowShareFile) { $Settings.AllowShareFile = $false }
-    if ($null -eq $Settings.AllowBox) { $Settings.AllowBox = $false }
-    if ($null -eq $Settings.AllowDropBox) { $Settings.AllowDropBox = $false }
-    if ($null -eq $Settings.AllowEgnyte) { $Settings.AllowEgnyte = $false }
+    if ($TestResult -eq $false) {
+        Write-Host "We're exiting as the correct license is not present for this standard."
+        return $true
+    } #we're done.
 
-    $StateIsCorrect = ($CurrentState.AllowGoogleDrive -eq $Settings.AllowGoogleDrive) -and
-    ($CurrentState.AllowShareFile -eq $Settings.AllowShareFile) -and
-    ($CurrentState.AllowBox -eq $Settings.AllowBox) -and
-    ($CurrentState.AllowDropBox -eq $Settings.AllowDropBox) -and
-    ($CurrentState.AllowEgnyte -eq $Settings.AllowEgnyte)
+    try {
+        $CurrentState = New-TeamsRequest -TenantFilter $Tenant -Cmdlet 'Get-CsTeamsClientConfiguration' |
+        Select-Object AllowGoogleDrive, AllowShareFile, AllowBox, AllowDropBox, AllowEgnyte
+    }
+    catch {
+        $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
+        Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the TeamsExternalFileSharing state for $Tenant. Error: $ErrorMessage" -Sev Error
+        return
+    }
+
+    $StateIsCorrect = ($CurrentState.AllowGoogleDrive -eq $Settings.AllowGoogleDrive ?? $false ) -and
+    ($CurrentState.AllowShareFile -eq $Settings.AllowShareFile ?? $false ) -and
+    ($CurrentState.AllowBox -eq $Settings.AllowBox ?? $false ) -and
+    ($CurrentState.AllowDropBox -eq $Settings.AllowDropBox ?? $false ) -and
+    ($CurrentState.AllowEgnyte -eq $Settings.AllowEgnyte ?? $false )
 
     if ($Settings.remediate -eq $true) {
         if ($StateIsCorrect -eq $true) {
             Write-LogMessage -API 'Standards' -tenant $Tenant -message 'Teams External File Sharing already set.' -sev Info
         } else {
-            $cmdparams = @{
+            $cmdParams = @{
+                Identity         = 'Global'
                 AllowGoogleDrive = $Settings.AllowGoogleDrive
                 AllowShareFile   = $Settings.AllowShareFile
                 AllowBox         = $Settings.AllowBox
@@ -63,7 +72,7 @@ function Invoke-CIPPStandardTeamsExternalFileSharing {
             }
 
             try {
-                New-TeamsRequest -TenantFilter $Tenant -Cmdlet 'Set-CsTeamsClientConfiguration' -CmdParams $cmdparams
+                New-TeamsRequest -TenantFilter $Tenant -Cmdlet 'Set-CsTeamsClientConfiguration' -CmdParams $cmdParams
                 Write-LogMessage -API 'Standards' -tenant $Tenant -message 'Updated Teams External File Sharing' -sev Info
             } catch {
                 $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
@@ -81,10 +90,10 @@ function Invoke-CIPPStandardTeamsExternalFileSharing {
         }
     }
 
-    if ($Setings.report -eq $true) {
+    if ($Settings.report -eq $true) {
         Add-CIPPBPAField -FieldName 'TeamsExternalFileSharing' -FieldValue $StateIsCorrect -StoreAs bool -Tenant $Tenant
 
-        if ($StateIsCorrect) {
+        if ($StateIsCorrect -eq $true) {
             $FieldValue = $true
         } else {
             $FieldValue = $CurrentState

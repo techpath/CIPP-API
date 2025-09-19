@@ -20,17 +20,24 @@ function Invoke-CIPPStandardGuestInvite {
         ADDEDDATE
             2024-11-12
         POWERSHELLEQUIVALENT
-
+            Graph API
         RECOMMENDEDBY
         UPDATECOMMENTBLOCK
             Run the Tools\Update-StandardsComments.ps1 script to update this comment block
     .LINK
-        https://docs.cipp.app/user-documentation/tenant/standards/list-standards/entra-aad-standards#medium-impact
+        https://docs.cipp.app/user-documentation/tenant/standards/list-standards
     #>
 
     param($Tenant, $Settings)
 
-    $CurrentState = New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy' -tenantid $Tenant
+    try {
+        $CurrentState = New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy' -tenantid $Tenant
+    }
+    catch {
+        $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
+        Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the GuestInvite state for $Tenant. Error: $ErrorMessage" -Sev Error
+        return
+    }
 
     # Input validation and value handling
     $AllowInvitesFromValue = $Settings.allowInvitesFrom.value ?? $Settings.allowInvitesFrom

@@ -27,12 +27,25 @@ function Invoke-CIPPStandardsharingDomainRestriction {
         UPDATECOMMENTBLOCK
             Run the Tools\Update-StandardsComments.ps1 script to update this comment block
     .LINK
-        https://docs.cipp.app/user-documentation/tenant/standards/list-standards/sharepoint-standards#high-impact
+        https://docs.cipp.app/user-documentation/tenant/standards/list-standards
     #>
 
     param($Tenant, $Settings)
+    $TestResult = Test-CIPPStandardLicense -StandardName 'sharingDomainRestriction' -TenantFilter $Tenant -RequiredCapabilities @('SHAREPOINTWAC', 'SHAREPOINTSTANDARD', 'SHAREPOINTENTERPRISE', 'SHAREPOINTENTERPRISE_EDU','ONEDRIVE_BASIC', 'ONEDRIVE_ENTERPRISE')
 
-    $CurrentState = New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/admin/sharepoint/settings' -tenantid $Tenant -AsApp $true
+    if ($TestResult -eq $false) {
+        Write-Host "We're exiting as the correct license is not present for this standard."
+        return $true
+    } #we're done.
+
+    try {
+        $CurrentState = New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/admin/sharepoint/settings' -tenantid $Tenant -AsApp $true
+    }
+    catch {
+        $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
+        Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the SharingDomainRestriction state for $Tenant. Error: $ErrorMessage" -Sev Error
+        return
+    }
 
     # Get mode value using null-coalescing operator
     $mode = $Settings.Mode.value ?? $Settings.Mode
@@ -40,11 +53,16 @@ function Invoke-CIPPStandardsharingDomainRestriction {
     if ($mode -eq 'none' -or $null -eq $mode) {
         $StateIsCorrect = $CurrentState.sharingDomainRestrictionMode -eq 'none'
     } else {
-        $SelectedDomains = [String[]]$Settings.Domains.Split(',').Trim()
-        $StateIsCorrect = ($CurrentState.sharingDomainRestrictionMode -eq $mode) -and
-                          ($mode -eq 'allowList' -and (!(Compare-Object -ReferenceObject $CurrentState.sharingAllowedDomainList -DifferenceObject $SelectedDomains))) -or
-                          ($mode -eq 'blockList' -and (!(Compare-Object -ReferenceObject $CurrentState.sharingBlockedDomainList -DifferenceObject $SelectedDomains)))
+        $SelectedDomains = [String[]]$Settings.Domains.Split(',').Trim() ?? @()
+        $CurrentAllowedDomains = $CurrentState.sharingAllowedDomainList ?? @()
+        $CurrentBlockedDomains = $CurrentState.sharingBlockedDomainList ?? @()
+
+        $StateIsCorrect = ($CurrentState.sharingDomainRestrictionMode -eq $mode) -and (
+            ($mode -eq 'allowList' -and ([string[]]($CurrentAllowedDomains | Sort-Object) -join ',') -eq ([string[]]($SelectedDomains | Sort-Object) -join ',')) -or
+            ($mode -eq 'blockList' -and ([string[]]($CurrentBlockedDomains | Sort-Object) -join ',') -eq ([string[]]($SelectedDomains | Sort-Object) -join ','))
+        )
     }
+    Write-Host "StateIsCorrect: $StateIsCorrect"
 
     if ($Settings.remediate -eq $true) {
         if ($StateIsCorrect -eq $true) {
@@ -61,13 +79,14 @@ function Invoke-CIPPStandardsharingDomainRestriction {
             }
 
             $cmdParams = @{
-                tenantid    = $tenant
-                uri         = 'https://graph.microsoft.com/beta/admin/sharepoint/settings'
-                AsApp       = $true
-                Type        = 'PATCH'
-                Body        = ($Body | ConvertTo-Json)
-                ContentType = 'application/json'
+                tenantid = $tenant
+                uri      = 'https://graph.microsoft.com/beta/admin/sharepoint/settings'
+                AsApp    = $true
+                Type     = 'PATCH'
+                body     = ($Body | ConvertTo-Json)
             }
+
+            Write-Host ($cmdParams | ConvertTo-Json -Depth 5)
 
             try {
                 $null = New-GraphPostRequest @cmdParams

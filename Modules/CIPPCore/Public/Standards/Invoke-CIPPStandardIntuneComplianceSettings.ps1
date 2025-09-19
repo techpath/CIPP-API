@@ -21,22 +21,38 @@ function Invoke-CIPPStandardIntuneComplianceSettings {
         ADDEDDATE
             2024-11-12
         POWERSHELLEQUIVALENT
-
+            Graph API
         RECOMMENDEDBY
         UPDATECOMMENTBLOCK
             Run the Tools\Update-StandardsComments.ps1 script to update this comment block
     .LINK
-        https://docs.cipp.app/user-documentation/tenant/standards/list-standards/intune-standards#low-impact
+        https://docs.cipp.app/user-documentation/tenant/standards/list-standards
     #>
 
     param($Tenant, $Settings)
+    $TestResult = Test-CIPPStandardLicense -StandardName 'IntuneComplianceSettings' -TenantFilter $Tenant -RequiredCapabilities @('INTUNE_A', 'MDM_Services', 'EMS', 'SCCM', 'MICROSOFTINTUNEPLAN1')
 
-    $CurrentState = New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/deviceManagement/settings' -tenantid $Tenant
+    if ($TestResult -eq $false) {
+        Write-Host "We're exiting as the correct license is not present for this standard."
+        return $true
+    } #we're done.
+
+    try {
+        $CurrentState = New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/deviceManagement/settings' -tenantid $Tenant |
+        Select-Object secureByDefault, deviceComplianceCheckinThresholdDays
+    }
+    catch {
+        $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
+        Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the intuneDeviceReg state for $Tenant. Error: $ErrorMessage" -Sev Error
+        return
+    }
 
     if ($null -eq $Settings.deviceComplianceCheckinThresholdDays) { $Settings.deviceComplianceCheckinThresholdDays = $CurrentState.deviceComplianceCheckinThresholdDays }
-    $SecureByDefault = $Settings.secureByDefault.value ? $Settings.secureByDefault.value : $Settings.secureByDefault
+    $SecureByDefault = [bool]($Settings.secureByDefault.value ? $Settings.secureByDefault.value : $Settings.secureByDefault)
+    $DeviceComplianceCheckinThresholdDays = [int]$Settings.deviceComplianceCheckinThresholdDays
+
     $StateIsCorrect = ($CurrentState.secureByDefault -eq $SecureByDefault) -and
-                        ($CurrentState.deviceComplianceCheckinThresholdDays -eq $Settings.deviceComplianceCheckinThresholdDays)
+    ($CurrentState.deviceComplianceCheckinThresholdDays -eq $DeviceComplianceCheckinThresholdDays)
 
     if ($Settings.remediate -eq $true) {
         if ($StateIsCorrect -eq $true) {
@@ -52,9 +68,9 @@ function Invoke-CIPPStandardIntuneComplianceSettings {
                     Body        = [pscustomobject]@{
                         settings = [pscustomobject]@{
                             secureByDefault                      = $SecureByDefault
-                            deviceComplianceCheckinThresholdDays = $Settings.deviceComplianceCheckinThresholdDays
+                            deviceComplianceCheckinThresholdDays = $DeviceComplianceCheckinThresholdDays
                         }
-                    } | ConvertTo-Json -Compress
+                    } | ConvertTo-Json -Compress -Depth 5
                 }
                 New-GraphPostRequest @GraphRequest
                 Write-LogMessage -API 'Standards' -Tenant $Tenant -Message 'Successfully updated Intune Compliance settings.' -Sev Info

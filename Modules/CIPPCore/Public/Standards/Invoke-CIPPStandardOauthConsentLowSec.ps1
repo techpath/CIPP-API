@@ -24,20 +24,34 @@ function Invoke-CIPPStandardOauthConsentLowSec {
         UPDATECOMMENTBLOCK
             Run the Tools\Update-StandardsComments.ps1 script to update this comment block
     .LINK
-        https://docs.cipp.app/user-documentation/tenant/standards/list-standards/entra-aad-standards#medium-impact
+        https://docs.cipp.app/user-documentation/tenant/standards/list-standards
     #>
 
     param($Tenant, $Settings)
 
-    $State = (New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy' -tenantid $tenant)
-    $PermissionState = (New-GraphGetRequest -Uri "https://graph.microsoft.com/beta/servicePrincipals(appId='00000003-0000-0000-c000-000000000000')/delegatedPermissionClassifications" -tenantid $tenant) | Select-Object -Property permissionName
+    try {
+        $State = (New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy' -tenantid $tenant)
+
+        $PermissionState = (New-GraphGetRequest -Uri "https://graph.microsoft.com/beta/servicePrincipals(appId='00000003-0000-0000-c000-000000000000')/delegatedPermissionClassifications" -tenantid $tenant) |
+        Select-Object -Property permissionName
+    }
+    catch {
+        $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
+        Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the OauthConsentLowSec state for $Tenant. Error: $ErrorMessage" -Sev Error
+        return
+    }
 
     $requiredPermissions = @('offline_access', 'openid', 'User.Read', 'profile', 'email')
     $missingPermissions = $requiredPermissions | Where-Object { $PermissionState.permissionName -notcontains $_ }
 
+    $Standards = Get-CIPPStandards -Tenant $tenant
+    $ConflictingStandard = $Standards | Where-Object -Property Standard -EQ 'OauthConsent'
+
     if ($Settings.remediate -eq $true) {
         if ($State.permissionGrantPolicyIdsAssignedToDefaultUserRole -in @('managePermissionGrantsForSelf.microsoft-user-default-low')) {
             Write-LogMessage -API 'Standards' -tenant $tenant -message 'Application Consent Mode(microsoft-user-default-low) is already enabled.' -sev Info
+        } elseif ($ConflictingStandard -and $State.permissionGrantPolicyIdsAssignedToDefaultUserRole -contains 'ManagePermissionGrantsForSelf.cipp-consent-policy') {
+            Write-LogMessage -API 'Standards' -tenant $tenant -message 'There is a conflicting OAuth Consent policy standard enabled for this tenant. Remove the Require admin consent for applications (Prevent OAuth phishing) standard from this tenant to apply the low security standard.' -sev Error
         } else {
             try {
                 $GraphParam = @{
@@ -95,8 +109,14 @@ function Invoke-CIPPStandardOauthConsentLowSec {
         if ($State.permissionGrantPolicyIdsAssignedToDefaultUserRole -notin @('managePermissionGrantsForSelf.microsoft-user-default-low')) {
             $State.permissionGrantPolicyIdsAssignedToDefaultUserRole = $false
             $ValueField = @{
-                authorizationPolicy       = $State
+                authorizationPolicy       = $State.permissionGrantPolicyIdsAssignedToDefaultUserRole
                 permissionClassifications = $PermissionState
+            }
+            if ($ConflictingStandard) {
+                $ValueField.conflictingStandard = @{
+                    name       = $ConflictingStandard.Standard
+                    templateid = $ConflictingStandard.TemplateId
+                }
             }
         } else {
             $State.permissionGrantPolicyIdsAssignedToDefaultUserRole = $true
